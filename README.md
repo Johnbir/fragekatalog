@@ -14,7 +14,7 @@ Hinweis: In einem öffentlichen Repository sind Fragen und Code sichtbar, nie ab
 
 ## 2. Antworten einsammeln
 
-**Variante A: Supabase (empfohlen, ein Link, vollautomatisch)**
+**Variante A: Supabase (empfohlen, ein Link, vollautomatisch) – bereits eingerichtet, `config.js` ist ausgefüllt**
 
 1. Kostenloses Projekt auf supabase.com anlegen.
 2. SQL Editor → Inhalt von `supabase.sql` einfügen → Run.
