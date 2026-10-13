@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Auswertung – Fragekatalog</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap" style="max-width:1050px">
+  <h1>Auswertung: gemeinsame Schnittmenge</h1>
+  <p class="mute">Diese Seite läuft komplett im Browser. Es wird nichts hochgeladen. Ziehe alle Antwortdateien (.json) hierher.</p>
+  <div class="drop" id="drop">
+    <p><b>Antwortdateien hier ablegen</b> oder
+      <label class="btn sec" style="cursor:pointer">Dateien wählen<input type="file" id="files" multiple accept=".json" hidden></label></p>
+    <p class="mute">Akzeptiert werden die Dateien aus dem Fragekatalog sowie ein JSON-Export der Supabase-Tabelle „antworten“.</p>
+  </div>
+  <div id="out"></div>
+</div>
+<script src="questions.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const BADGE = { einig: ['b-ok', 'Einig'], spanne: ['b-warn', 'Spanne'], konflikt: ['b-bad', 'Konflikt'], veto: ['b-bad', 'Nie-Veto'], text: ['b-mute', 'Freitext'], multi: ['b-mute', 'Verteilung'] };
+
+let responses = [];
+
+function load(files) {
+  const reads = [...files].map((f) => f.text().then((t) => { try { return JSON.parse(t); } catch (e) { return null; } }));
+  Promise.all(reads).then((all) => {
+    const list = [];
+    all.forEach((d) => { if (!d) return; (Array.isArray(d) ? d : [d]).forEach((x) => { const a = x.answers || x; if (a && typeof a === 'object') list.push({ id: x.id || Math.random(), a }); }); });
+    // Dubletten (gleicher Code) entfernen
+    const seen = new Set(); responses = list.filter((r) => (seen.has(r.id) ? false : seen.add(r.id)));
+    render();
+  });
+}
+$('#files').onchange = (e) => load(e.target.files);
+const drop = $('#drop');
+drop.ondragover = (e) => { e.preventDefault(); };
+drop.ondrop = (e) => { e.preventDefault(); load(e.dataTransfer.files); };
+
+function spreadClass(vals) {
+  if (vals.length < 2) return 'einig';
+  const s = Math.max(...vals) - Math.min(...vals);
+  return s <= 1 ? 'einig' : s === 2 ? 'spanne' : 'konflikt';
+}
+
+function evalScale(vals) {
+  vals = vals.map(Number).filter((n) => n >= 1 && n <= 5);
+  if (!vals.length) return null;
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+  return { cls: spreadClass(vals), text: `Werte: ${vals.sort().join(', ')} · Mittel ${mean.toFixed(1)}` };
+}
+function evalChoices(vals) {
+  vals = vals.filter(Boolean);
+  if (!vals.length) return null;
+  const c = {}; vals.forEach((v) => (c[v] = (c[v] || 0) + 1));
+  const e = Object.entries(c).sort((a, b) => b[1] - a[1]);
+  const share = e[0][1] / vals.length;
+  return { cls: e.length === 1 ? 'einig' : share >= 0.6 ? 'spanne' : 'konflikt', text: e.map(([k, n]) => `${esc(k)}: ${n}`).join(' · ') };
+}
+function evalMKN(vals) {
+  vals = vals.filter(Boolean);
+  if (!vals.length) return null;
+  const c = { Muss: 0, Kann: 0, Egal: 0, Nie: 0 }; vals.forEach((v) => c[v]++);
+  let cls = new Set(vals).size === 1 ? 'einig' : 'spanne';
+  if (c.Nie && c.Muss) cls = 'konflikt'; else if (c.Nie) cls = 'veto';
+  return { cls, text: Object.entries(c).filter(([, n]) => n).map(([k, n]) => `${k}: ${n}`).join(' · ') };
+}
+
+function build() {
+  const rows = [];
+  SECTIONS.forEach((s) => {
+    s.items.forEach((it) => {
+      const get = (r) => r.a[it.id];
+      if (it.type === 'scale') rows.push({ sec: s.title, q: it.q, ...(evalScale(responses.map(get)) || {}) });
+      else if (it.type === 'single') rows.push({ sec: s.title, q: it.q, ...(evalChoices(responses.map(get)) || {}) });
+      else if (it.type === 'multi') {
+        const c = {}; responses.forEach((r) => (get(r) || []).forEach((v) => (c[v] = (c[v] || 0) + 1)));
+        const e = Object.entries(c).sort((a, b) => b[1] - a[1]);
+        rows.push({ sec: s.title, q: it.q, cls: e.length ? 'multi' : undefined, text: e.map(([k, n]) => `${esc(k)}: ${n}`).join(' · ') });
+      } else if (it.type === 'matrix' || it.type === 'matrixscale') {
+        it.rows.forEach((row) => {
+          const vals = responses.map((r) => (get(r) || {})[row]);
+          const ev = it.type === 'matrix' ? evalMKN(vals) : evalScale(vals);
+          rows.push({ sec: s.title, q: row, ...(ev || {}) });
+        });
+      } else if (it.type === 'text') {
+        const t = shuffle(responses.map(get).filter((x) => x && String(x).trim()));
+        rows.push({ sec: s.title, q: it.q, cls: t.length ? 'text' : undefined, text: t.map((x) => '• ' + esc(x)).join('<br>') });
+      }
+    });
+  });
+  return rows.filter((r) => r.cls);
+}
+
+function render() {
+  const rows = build();
+  const n = responses.length;
+  const cnt = (c) => rows.filter((r) => r.cls === c).length;
+  let h = `<div class="card"><b>${n}</b> Antworten geladen. Einig: <b>${cnt('einig')}</b> · Spanne: <b>${cnt('spanne')}</b> · Konflikt: <b>${cnt('konflikt')}</b> · Nie-Veto: <b>${cnt('veto')}</b>
+  <p class="mute">Regeln: Skalen mit höchstens 1 Punkt Abstand = einig, 2 Punkte = Spanne, mehr = Konflikt. Bei Tätigkeiten: ein „Nie“ setzt die Tätigkeit zunächst auf die Verbotsliste (Nie-Veto), „Nie“ gegen „Muss“ ist ein Konflikt. Bei Einzelwahl: alle gleich = einig, mindestens 60 % für eine Option = Spanne, sonst Konflikt. Freitexte sind gemischt, damit man Antworten nicht einer Person zuordnen kann.</p>
+  ${n < 3 ? '<div class="notice">Bei weniger als 3 Antworten ist die Anonymität nicht gewährleistet.</div>' : ''}
+  <p><label><input type="checkbox" id="only"> nur Spanne, Konflikt und Veto anzeigen</label> <button class="sec" id="csv">CSV exportieren</button></p></div>`;
+  h += '<table class="res"><tr><th>Abschnitt</th><th>Frage / Tätigkeit</th><th>Ergebnis</th><th>Antworten</th></tr>';
+  rows.forEach((r) => {
+    const [bc, bt] = BADGE[r.cls];
+    h += `<tr data-cls="${r.cls}"><td class="mute">${esc(r.sec.split(':')[0])}</td><td>${esc(r.q)}</td><td><span class="badge ${bc}">${bt}</span></td><td>${r.text || ''}</td></tr>`;
+  });
+  h += '</table>';
+  $('#out').innerHTML = h;
+  $('#only').onchange = (e) => document.querySelectorAll('table.res tr[data-cls]').forEach((tr) => { tr.style.display = e.target.checked && !['spanne', 'konflikt', 'veto'].includes(tr.dataset.cls) ? 'none' : ''; });
+  $('#csv').onclick = () => {
+    const lines = [['Abschnitt', 'Frage', 'Ergebnis', 'Antworten']].concat(rows.map((r) => [r.sec, r.q, BADGE[r.cls][1], (r.text || '').replace(/<br>/g, ' | ').replace(/&amp;/g, '&')]));
+    const csv = lines.map((l) => l.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(';')).join('\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' })); a.download = 'auswertung.csv'; a.click();
+  };
+}
+</script>
+</body>
+</html>
